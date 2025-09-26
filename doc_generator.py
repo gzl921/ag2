@@ -157,7 +157,8 @@ class PythonCodeAnalyzer(BaseCodeAnalyzer):
                 'imports': [],
                 'docstrings': [],
                 'line_count': len(content.splitlines()),
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'module_docstring': ast.get_docstring(tree) or None
             }
             
             for node in ast.walk(tree):
@@ -269,14 +270,12 @@ class AgentFactory:
         """Create code analyzer agent"""
         return ConversableAgent(
             name="code_analyzer",
-            system_message="""You are a code analysis expert. Your role is to:
-            1. Analyze code structure and extract meaningful information
-            2. Identify functions, classes, and their relationships
-            3. Extract docstrings and comments
-            4. Provide structured analysis results
-            5. Identify potential issues or improvements
+            system_message="""You are a code analysis expert. Analyze the code and provide a brief summary of:
+            1. Main functions and classes
+            2. Key functionality
+            3. Any notable patterns or issues
             
-            Always provide clear, structured analysis of code components with specific feedback.""",
+            Keep your response concise and focused.""",
             llm_config=self.llm_config,
             human_input_mode="NEVER"
         )
@@ -285,14 +284,12 @@ class AgentFactory:
         """Create documentation generator agent"""
         return ConversableAgent(
             name="doc_generator",
-            system_message="""You are a documentation generation expert. Your role is to:
-            1. Generate comprehensive documentation from code analysis
-            2. Create clear function/class descriptions
-            3. Generate API documentation
-            4. Create README files and examples
-            5. Provide code improvement suggestions
+            system_message="""You are a documentation generation expert. Create concise documentation that:
+            1. Explains what the code does in simple terms
+            2. Highlights key functions and their purpose
+            3. Provides a brief overview of the code structure
             
-            Always create clear, helpful documentation that explains what the code does and how to improve it.""",
+            Keep documentation clear and to the point. Avoid excessive detail.""",
             llm_config=self.llm_config,
             human_input_mode="NEVER"
         )
@@ -301,14 +298,12 @@ class AgentFactory:
         """Create quality reviewer agent"""
         return ConversableAgent(
             name="quality_reviewer",
-            system_message="""You are a documentation quality expert. Your role is to:
-            1. Review generated documentation for quality
-            2. Check for completeness and accuracy
-            3. Suggest improvements
-            4. Ensure documentation follows best practices
-            5. Provide final feedback on code quality and documentation
+            system_message="""You are a documentation quality expert. Review the documentation and:
+            1. Check for clarity and completeness
+            2. Suggest any important improvements
+            3. Ensure it's easy to understand
             
-            Always provide constructive feedback to improve documentation quality.""",
+            Provide brief, constructive feedback.""",
             llm_config=self.llm_config,
             human_input_mode="NEVER"
         )
@@ -317,15 +312,12 @@ class AgentFactory:
         """Create coordinator agent"""
         return ConversableAgent(
             name="coordinator",
-            system_message="""You are the workflow coordinator for the documentation system.
-            Your role is to:
-            1. Orchestrate the documentation generation process
-            2. Coordinate between different agents
-            3. Ensure all steps are completed
-            4. Manage the overall workflow
-            5. Summarize the final results
+            system_message="""You are the workflow coordinator. Create a final summary that:
+            1. Combines the analysis and documentation
+            2. Provides a clear overview of the code
+            3. Highlights the most important points
             
-            Always ensure the process flows smoothly and all agents complete their tasks.""",
+            Keep the summary concise and well-organized.""",
             llm_config=self.llm_config,
             human_input_mode="NEVER"
         )
@@ -465,15 +457,22 @@ class DocumentationGenerator:
 
         what_lines = []
         first_doc = None
-        for func in analysis.get('functions', []):
-            if func.get('docstring'):
-                first_doc = (func['docstring'] or '').split('\n', 1)[0]
-                break
-        if not first_doc and analysis.get('classes'):
-            for cls in analysis['classes']:
-                if cls.get('docstring'):
-                    first_doc = (cls['docstring'] or '').split('\n', 1)[0]
+        
+        # Check for module-level docstring first
+        if analysis.get('module_docstring'):
+            first_doc = analysis['module_docstring'].split('\n', 1)[0]
+        else:
+            # Fall back to function/class docstrings
+            for func in analysis.get('functions', []):
+                if func.get('docstring'):
+                    first_doc = (func['docstring'] or '').split('\n', 1)[0]
                     break
+            if not first_doc and analysis.get('classes'):
+                for cls in analysis['classes']:
+                    if cls.get('docstring'):
+                        first_doc = (cls['docstring'] or '').split('\n', 1)[0]
+                        break
+        
         if first_doc:
             what_lines.append(first_doc.strip())
         else:
@@ -495,6 +494,34 @@ class DocumentationGenerator:
         how = "## How it works\n" + "; ".join([b for b in key_bits if b])
 
         out = header + what + "\n\n" + how + "\n"
+        
+        # Add simple function summary
+        if analysis.get('functions'):
+            out += "\n## Functions\n"
+            for func in analysis['functions']:
+                func_name = func['name']
+                func_doc = func.get('docstring', '').strip()
+                if func_doc and func_doc != "No docstring":
+                    # Use first line of docstring
+                    func_desc = func_doc.split('\n')[0].strip()
+                else:
+                    # Generate simple description from function name
+                    func_desc = f"Function: {func_name}"
+                out += f"- **{func_name}**: {func_desc}\n"
+        
+        # Add simple class summary
+        if analysis.get('classes'):
+            out += "\n## Classes\n"
+            for cls in analysis['classes']:
+                cls_name = cls['name']
+                cls_doc = cls.get('docstring', '').strip()
+                if cls_doc and cls_doc != "No docstring":
+                    # Use first line of docstring
+                    cls_desc = cls_doc.split('\n')[0].strip()
+                else:
+                    # Generate simple description from class name
+                    cls_desc = f"Class: {cls_name}"
+                out += f"- **{cls_name}**: {cls_desc}\n"
         
         # Add LLM explanation if enabled
         if use_llm_explainer:
